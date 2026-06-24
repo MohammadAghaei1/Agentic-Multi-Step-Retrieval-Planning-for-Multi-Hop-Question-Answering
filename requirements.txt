@@ -1,0 +1,3 @@
+ijson
+sentence-transformers
+scikit-learn
