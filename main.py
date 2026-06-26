@@ -1,90 +1,76 @@
 from pathlib import Path
-from src.data_loader import read_first_example
-from src.preprocessor import context_to_passages
+
 from sentence_transformers import SentenceTransformer
-from src.retriever import embed_passages
-from src.retriever import search
-from src.synthesizer import collect_top_evidence
-from src.synthesizer import build_answer_prompt
 
-train_path = Path("data/raw/hotpotqa_train.json")
+from src.data_loader import read_examples
+from src.preprocessor import context_to_passages
+from src.retriever import embed_passages, search
+from src.planner import generate_plan
+from src.synthesizer import collect_top_evidence, build_answer_prompt
+from src.llm_client import generate_answer
+from src.vector_store import get_collection
 
-sample = read_first_example(train_path)
+def run_pipeline(sample, model):
+    print("\n" + "=" * 80)
+    print("Question:")
+    print(sample["question"])
 
-print("Question:", sample["question"])
-print("Answer:", sample["answer"])
+    passages = context_to_passages(sample)
+    passage_embeddings = embed_passages(model, passages)
 
-print("Context titles:", sample["context"]["title"])
-print("Number of context documents:", len(sample["context"]["title"]))
+    queries = generate_plan(sample["question"])
 
-passages = context_to_passages(sample)
+    print("\nGenerated retrieval plan:")
+    for i, query in enumerate(queries, start=1):
+        print(f"Step {i}: {query}")
 
-print("Number of passages:", len(passages))
-print("First passage title:", passages[0]["title"])
-print("First passage text:", passages[0]["text"])
-print("First passage id:", passages[0]["passage_id"])
-print("First passage content:", passages[0]["content"])
+    evidence_memory = []
 
-model = SentenceTransformer("embedmodel")
+    for query in queries:
+        results = search(
+            query=query,
+            model=model,
+            passages=passages,
+            passage_embeddings=passage_embeddings,
+            top_k=2
+        )
 
-embedding = model.encode(passages[0]["content"])
+        evidence_memory.append({
+            "step": len(evidence_memory) + 1,
+            "query": query,
+            "results": results
+        })
 
-print("Embedding size:", embedding.shape)
-print("First 5 embedding values:", embedding[:5])
+    top_evidence = collect_top_evidence(evidence_memory)
 
+    print("\nRetrieved evidence:")
+    for evidence in top_evidence:
+        print(f"\nStep {evidence['step']}")
+        print("Query:", evidence["query"])
+        print("Title:", evidence["title"])
+        print("Score:", evidence["score"])
+        print("Text:", evidence["text"])
 
-passage_embeddings = embed_passages(model, passages)
-print("Passage embeddings shape:", passage_embeddings.shape)
+    answer_prompt = build_answer_prompt(sample["question"], top_evidence)
+    final_answer = generate_answer(answer_prompt)
 
+    print("\nGenerated final answer:")
+    print(final_answer)
 
-queries = [
-    "When was Arthur's Magazine started?",
-    "When was First for Women started?"
-]
-
-evidence_memory = []
-
-for query in queries:
-    results = search(
-        query=query,
-        model=model,
-        passages=passages,
-        passage_embeddings=passage_embeddings,
-        top_k=2
-    )
-
-    evidence_memory.append({
-        "step": len(evidence_memory) + 1,
-        "query": query,
-        "results": results
-    })
-
-print("\nEvidence memory:")
-for item in evidence_memory:
-    print("Step:", item["step"])
-    print("Query:", item["query"])
-    print("Top evidence:", item["results"][0]["title"])
+    print("\nGold answer:")
+    print(sample["answer"])
 
 
+def main():
+    train_path = Path("data/raw/hotpotqa_train.json")
 
-print("\nTop evidence texts:")
-for item in evidence_memory:
-    top_result = item["results"][0]
-    print("\nStep:", item["step"])
-    print("Query:", item["query"])
-    print("Title:", top_result["title"])
-    print("Text:", top_result["text"])
+    samples = read_examples(train_path, limit=5)
 
+    model = SentenceTransformer("embedmodel")
 
-top_evidence = collect_top_evidence(evidence_memory)
-print("\nCollected top evidence:")
-for evidence in top_evidence:
-    print("Step:", evidence["step"])
-    print("Title:", evidence["title"])
-    print("Score:", evidence["score"])
+    for sample in samples:
+        run_pipeline(sample, model)
 
 
-
-answer_prompt = build_answer_prompt(sample["question"], top_evidence)
-print("\nAnswer prompt:")
-print(answer_prompt)
+if __name__ == "__main__":
+    main()

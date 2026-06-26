@@ -1,3 +1,7 @@
 ijson
 sentence-transformers
 scikit-learn
+groq
+python-dotenv
+chromadb
+tavily-python
